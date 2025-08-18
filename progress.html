@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Tutor - Progress</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      background: linear-gradient(135deg, #6EE7B7, #3B82F6);
+      margin: 0;
+      display: flex;
+    }
+    .content {
+      margin-left: 240px; /* Leaves space for sidebar */
+      padding: 30px;
+      width: 100%;
+    }
+    .container {
+      max-width: 1000px;
+      margin: auto;
+      background: white;
+      border-radius: 15px;
+      padding: 20px;
+      box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+    }
+    h2 { text-align: center; margin-bottom: 20px; }
+    canvas { margin: 20px auto; display: block; max-width: 700px; }
+    table {
+      width: 100%;
+      margin-top: 20px;
+      border-collapse: collapse;
+    }
+    th, td {
+      padding: 10px;
+      border: 1px solid #ccc;
+      text-align: center;
+    }
+    th { background: #f3f3f3; }
+  </style>
+</head>
+<body>
+  <!-- Sidebar -->
+  <div id="sidebar-container"></div>
+
+  <!-- Main Content -->
+  <div class="content">
+    <div class="container">
+      <h2>Your Progress</h2>
+      <canvas id="lineChart"></canvas>
+      <canvas id="pieChart"></canvas>
+      <canvas id="subjectChart"></canvas>
+      <canvas id="radarChart"></canvas>
+      <h3>Previous Tests</h3>
+      <table id="testsTable">
+        <thead>
+          <tr><th>Date</th><th>Score</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+
+  <script>
+    // ✅ Firebase Config (same as index.html)
+    const firebaseConfig = {
+      apiKey: "AIzaSyAIJ3WZ7I07z3swqi_aHqBXk1EzSvTeUT0",
+      authDomain: "athena-91c61.firebaseapp.com",
+      projectId: "athena-91c61",
+      storageBucket: "athena-91c61.firebasestorage.app",
+      messagingSenderId: "7096805667",
+      appId: "1:7096805667:web:c55ca7c7cff856519f0496",
+      measurementId: "G-6V99HBZ4NQ"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const auth = firebase.auth();
+
+    // 🔹 Fetch test data
+    async function loadProgress(uid) {
+      const res = await fetch("http://127.0.0.1:5000/get_tests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uid: uid })
+      });
+      const data = await res.json();
+      if (!data.tests) return;
+
+      const dates = [];
+      const scores = [];
+      const tableBody = document.querySelector("#testsTable tbody");
+      tableBody.innerHTML = "";
+
+      let subjectTotals = {};
+
+      data.tests.forEach(t => {
+        if (t.score) {
+          const [correct, total] = t.score.split("/").map(Number);
+          dates.push(new Date(t.createdAt).toLocaleDateString());
+          scores.push((correct/total)*100);
+
+          let row = `<tr><td>${new Date(t.createdAt).toLocaleDateString()}</td><td>${t.score}</td></tr>`;
+          tableBody.innerHTML += row;
+        }
+
+        if (t.subjectScores) {
+          Object.keys(t.subjectScores).forEach(subj => {
+            if (!subjectTotals[subj]) subjectTotals[subj] = { correct: 0, total: 0 };
+            subjectTotals[subj].correct += t.subjectScores[subj].correct;
+            subjectTotals[subj].total += t.subjectScores[subj].total;
+          });
+        }
+      });
+
+      // Line chart of scores
+      new Chart(document.getElementById("lineChart"), {
+        type: "line",
+        data: {
+          labels: dates,
+          datasets: [{
+            label: "Score (%)",
+            data: scores,
+            borderColor: "blue",
+            fill: false,
+            tension: 0.3
+          }]
+        }
+      });
+
+      // Pie chart (latest test breakdown)
+      if (data.tests.length > 0) {
+        const last = data.tests[data.tests.length - 1];
+        if (last.score) {
+          const [correct, total] = last.score.split("/").map(Number);
+          const incorrect = total - correct;
+          new Chart(document.getElementById("pieChart"), {
+            type: "pie",
+            data: {
+              labels: ["Correct", "Incorrect"],
+              datasets: [{
+                data: [correct, incorrect],
+                backgroundColor: ["#34D399", "#F87171"]
+              }]
+            }
+          });
+        }
+      }
+
+      // Subject Breakdown Bar Chart
+      if (Object.keys(subjectTotals).length > 0) {
+        const labels = Object.keys(subjectTotals);
+        const values = labels.map(subj =>
+          Math.round((subjectTotals[subj].correct / subjectTotals[subj].total) * 100)
+        );
+
+        new Chart(document.getElementById("subjectChart"), {
+          type: "bar",
+          data: {
+            labels: labels,
+            datasets: [{
+              label: "Average % Correct by Subject",
+              data: values,
+              backgroundColor: ["#60A5FA", "#34D399", "#FBBF24", "#F87171", "#A78BFA"]
+            }]
+          },
+          options: {
+            scales: { y: { beginAtZero: true, max: 100 } }
+          }
+        });
+
+        // Radar Chart for relative strengths
+        new Chart(document.getElementById("radarChart"), {
+          type: "radar",
+          data: {
+            labels: labels,
+            datasets: [{
+              label: "Performance by Subject (%)",
+              data: values,
+              backgroundColor: "rgba(59,130,246,0.2)",
+              borderColor: "rgba(59,130,246,1)",
+              pointBackgroundColor: "rgba(59,130,246,1)"
+            }]
+          },
+          options: {
+            scales: { r: { beginAtZero: true, max: 100 } }
+          }
+        });
+      }
+    }
+
+    // 🔹 Run when logged in
+    auth.onAuthStateChanged(user => {
+      if (user) {
+        loadProgress(user.uid);
+      } else {
+        window.location.href = "index.html";
+      }
+    });
+
+    // 🔹 Load Sidebar dynamically
+    fetch("sidebar.html")
+      .then(res => res.text())
+      .then(html => {
+        document.getElementById("sidebar-container").innerHTML = html;
+      });
+  </script>
+</body>
+</html>

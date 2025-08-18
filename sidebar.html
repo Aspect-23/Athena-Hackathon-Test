@@ -1,0 +1,55 @@
+<div class="sidebar">
+  <h2>AI Tutor</h2>
+  <a href="dashboard.html">Dashboard</a>
+  <a href="tutor.html">Tutor</a>
+  <a href="test.html">Tests</a>
+  <a href="progress.html">Progress</a>
+  <a href="profile.html">Profile</a>
+  <button onclick="logout()">Logout</button>
+</div>
+
+<style>
+  .sidebar {
+    width: 220px;
+    background: rgba(255,255,255,0.9);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    border-radius: 0 20px 20px 0;
+    box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+    height: 100vh;
+    position: fixed;
+    top: 0; left: 0;
+  }
+  .sidebar h2 { 
+    text-align: center; 
+    margin-bottom: 30px; 
+    color: #444; 
+  }
+  .sidebar a, .sidebar button {
+    margin: 10px 0;
+    padding: 12px;
+    text-align: center;
+    text-decoration: none;
+    border: none;
+    border-radius: 10px;
+    background: #4facfe;
+    color: white;
+    font-size: 16px;
+    cursor: pointer;
+    transition: 0.3s;
+    display: block;
+  }
+  .sidebar a:hover, .sidebar button:hover {
+    background: #00f2fe;
+  }
+</style>
+
+<script>
+  function logout() {
+    firebase.auth().signOut().then(() => {
+      alert("Logged out successfully!");
+      window.location.href = "index.html";
+    });
+  }
+</script>
