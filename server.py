@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import datetime, timezone
 from typing import List, Dict
 
@@ -21,19 +22,25 @@ COHERE_MODEL = os.getenv("COHERE_MODEL", "command-r-plus")
 PORT = int(os.getenv("PORT", "5000"))
 HOST = os.getenv("HOST", "127.0.0.1")
 
-FIREBASE_CREDENTIALS = os.getenv("FIREBASE_CREDENTIALS", "")
+# Read Firebase credentials as JSON string from .env
+FIREBASE_CREDENTIALS_JSON = os.getenv("FIREBASE_CREDENTIALS", "")
 
 if not COHERE_API_KEY:
     raise RuntimeError("COHERE_API_KEY missing in .env")
 
-if not FIREBASE_CREDENTIALS or not os.path.exists(FIREBASE_CREDENTIALS):
-    raise RuntimeError("FIREBASE_CREDENTIALS missing or file not found. Put the service account JSON path in .env")
+if not FIREBASE_CREDENTIALS_JSON:
+    raise RuntimeError("FIREBASE_CREDENTIALS missing in environment variables")
+
+try:
+    cred_dict = json.loads(FIREBASE_CREDENTIALS_JSON)
+except json.JSONDecodeError as e:
+    raise RuntimeError(f"FIREBASE_CREDENTIALS is not valid JSON: {e}")
 
 # Cohere client
 co = cohere.Client(COHERE_API_KEY)
 
 # Firebase Admin / Firestore
-cred = credentials.Certificate(FIREBASE_CREDENTIALS)
+cred = credentials.Certificate(cred_dict)
 firebase_admin.initialize_app(cred)
 db = firestore.client()
 
@@ -41,40 +48,27 @@ db = firestore.client()
 # Flask App
 # -----------------------------
 app = Flask(__name__)
-CORS(app)  # allow browser calls from your frontend
-
+CORS(app)
 
 # -----------------------------
 # Helpers
 # -----------------------------
 def now_iso() -> str:
-    """UTC ISO-8601 with Z suffix, lexicographically sortable."""
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
 
 def chats_collection(uid: str):
     return db.collection("students").document(uid).collection("chats")
 
-
 def fetch_chat_history(uid: str, limit: int = 14) -> List[Dict]:
-    """
-    Get the last `limit` messages (user+ai), oldest first.
-    Each item: {role: "user"|"ai", message: str, timestamp: iso}
-    """
     q = (
         chats_collection(uid)
         .order_by("timestamp", direction=firestore.Query.DESCENDING)
         .limit(limit)
     )
     docs = list(q.stream())
-    # reverse to chronological
     return [d.to_dict() for d in reversed(docs)]
 
-
 def format_history_for_prompt(history: List[Dict]) -> str:
-    """
-    Convert stored history to a clean conversational context.
-    """
     lines = []
     for item in history:
         role = item.get("role", "user").upper()
@@ -82,11 +76,7 @@ def format_history_for_prompt(history: List[Dict]) -> str:
         lines.append(f"{role}: {msg}")
     return "\n".join(lines)
 
-
 def guardrails_prefix() -> str:
-    """
-    System-style preface to keep the AI within tutoring scope.
-    """
     return (
         "You are a friendly, encouraging AI tutor for students in grades 2-12. "
         "Your job: teach, explain clearly, ask follow-up questions, encourage, and help with school subjects. "
@@ -94,11 +84,7 @@ def guardrails_prefix() -> str:
         "Use simple steps, examples, and short paragraphs. When helpful, ask the student a question to check understanding.\n"
     )
 
-
 def build_prompt(history_text: str, latest_user_message: str) -> str:
-    """
-    Cohere prompt combining system guidance + context + new message.
-    """
     return (
         guardrails_prefix()
         + "Here is the recent conversation between YOU (the tutor) and the STUDENT:\n"
@@ -108,37 +94,27 @@ def build_prompt(history_text: str, latest_user_message: str) -> str:
         "Respond now as the tutor."
     )
 
-
 def generate_ai_reply(prompt: str) -> str:
-    """
-    Call Cohere to generate a reply.
-    """
     try:
         resp = co.generate(
             model=COHERE_MODEL,
             prompt=prompt,
-            max_tokens=220,      # keep replies concise
-            temperature=0.6,     # helpful + reasonably creative
-            k=0,                  # let the model choose
-            stop_sequences=[]     # allow full response
+            max_tokens=220,
+            temperature=0.6,
+            k=0,
+            stop_sequences=[]
         )
         text = (resp.generations[0].text or "").strip()
-        # light post-processing
         return text.replace("\n\n\n", "\n\n").strip()
     except Exception as e:
         return f"Oops—I'm having trouble thinking right now: {e}"
 
-
 def save_message(uid: str, role: str, message: str) -> None:
-    """
-    Save a single message (user or ai) to Firestore.
-    """
     chats_collection(uid).add({
-        "role": role,                    # "user" or "ai"
+        "role": role,
         "message": message,
         "timestamp": now_iso()
     })
-
 
 # -----------------------------
 # Routes
@@ -147,21 +123,8 @@ def save_message(uid: str, role: str, message: str) -> None:
 def health():
     return jsonify({"ok": True})
 
-
 @app.route("/chat", methods=["POST"])
 def chat():
-    """
-    Body:
-      { "uid": "<firebase-auth-uid>", "message": "<student text>" }
-
-    Behavior:
-      - Save the user message to Firestore.
-      - Fetch last messages (including this one).
-      - Build prompt with memory.
-      - Generate AI reply (Cohere).
-      - Save AI reply to Firestore.
-      - Return reply JSON.
-    """
     data = request.get_json(force=True, silent=True) or {}
     uid = (data.get("uid") or "").strip()
     user_msg = (data.get("message") or "").strip()
@@ -171,21 +134,13 @@ def chat():
     if not user_msg:
         return jsonify({"error": "message is required"}), 400
 
-    # 1) Save the user's new message
     save_message(uid, "user", user_msg)
-
-    # 2) Pull the last N messages for context
-    history = fetch_chat_history(uid, limit=14)  # ~7 turns (user+ai)
+    history = fetch_chat_history(uid, limit=14)
     history_text = format_history_for_prompt(history)
-
-    # 3) Build prompt + call AI
     prompt = build_prompt(history_text, user_msg)
     ai_reply = generate_ai_reply(prompt)
-
-    # 4) Save AI reply
     save_message(uid, "ai", ai_reply)
 
-    # 5) Return to frontend
     return jsonify({"reply": ai_reply})
 
 @app.route("/generate_test", methods=["POST"])
@@ -362,3 +317,4 @@ def get_tests():
 if __name__ == "__main__":
     print(f"🚀 AI Tutor backend running on http://{HOST}:{PORT}")
     app.run(host=HOST, port=PORT, debug=True)
+
